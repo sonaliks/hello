@@ -3,7 +3,7 @@ Parameters:
   SecurityGroups:
     Type: 'List<AWS::EC2::SecurityGroup::Id>'
     Description: The list of SecurityGroupIds in your Virtual Private Cloud (VPC)
-    Default: "sg-02ca5de3d42851dca","sg-0340ed3941828a8d2"
+    Default: "sg-02ca5de3d42851dca,sg-0340ed3941828a8d2"
 
 Resources:
   MyEC2Instance:
