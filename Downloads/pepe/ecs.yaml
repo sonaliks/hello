@@ -1,0 +1,390 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: codedeploy backend-stack using blue/green deployment
+
+##
+## parameters: can be referenced within 'Resources'
+##
+Parameters:
+    Vpc:
+        Type: AWS::EC2::VPC::Id
+        Description: vpc id
+
+    VpcCiderBlock:
+        Type: String
+        Description: overall available ip addresses for vpc
+
+    ElbSubnets:
+        Type: List<AWS::EC2::Subnet::Id>
+        Description: comma-delimited list of ELB subnets
+
+    EcsSubnets:
+        Type: List<AWS::EC2::Subnet::Id>
+        Description: comma-delimited list of ECS subnets
+
+    CertificateArn:
+        Type: String
+        Description: single certificate arn
+        Default: none
+
+    ContainerName:
+        Type: String
+        Description: container definition name for backend
+        Default: ecs-backend-bgs
+
+    RepositoryName:
+        Type: String
+        Description: docker registry repository name
+
+    HostPort:
+        Type: Number
+        Description: host port
+        Default: 80
+
+    ContainerPort:
+        Type: Number
+        Description: container port
+        Default: 443
+
+    Cpu:
+        Type: Number
+        Description: container cpu
+        Default: 256
+
+    Memory:
+        Type: Number
+        Description: container memory
+        Default: 512
+
+    HealthCheckPath:
+        Type: String
+        Description: health check for alb target group
+        Default: /
+
+    HealthCheckIntervalSeconds:
+        Type: Number
+        Description: >
+            health check interval in seconds NLB supports only 10 or 30 seconds
+        Default: 10
+
+    HealthyThresholdCount:
+        Type: Number
+        Description: minimum required instances to be considered healthy
+        Default: 4
+
+    UnhealthyThresholdCount:
+        Type: Number
+        Description: minimum required instances to be considered unhealthy
+        Default: 4
+
+    HealthCheckTimeoutSeconds:
+        Type: Number
+        Description: >
+            amount of time (in seconds) which no response from a target means a
+            failed health check
+        Default: 10
+
+    TagName:
+        Type: String
+        Description: tag name for blue-green deployed resource
+        Default: ecs-backend
+
+    ElbProtocol:
+        Type: String
+        Description: >
+            protocol for connections from clients to the load balancer. For
+            Application Load Balancers, the supported protocols are HTTP and
+            HTTPS. For Network Load Balancers, the supported protocols are TCP,
+            TLS, UDP, and TCP_UDP
+        Default: TCP
+        AllowedValues:
+          - HTTP
+          - HTTPS
+          - TCP
+          - TLS
+
+    AccessLogsEnabled:
+        Type: String
+        Description: whether access logs are enabled
+        Default: "false"
+        AllowedValues: ["true", "false"]
+
+    AccessLogsBucket:
+        Type: String
+        Description: S3 bucket for the access logs
+        Default: none
+
+    AccessLogsPrefix:
+        Type: String
+        Description: prefix in the S3 bucket for the access logs
+        Default: none
+
+    LoadBalancerCrossZone:
+        Type: String
+        Description: whether cross-zone load balancing is enabled
+        Default: "false"
+        AllowedValues: ["true", "false"]
+
+    ParameterDockerApplication:
+        Type: AWS::SSM::Parameter::Value<String>
+        Description: parameter store reference for docker image version
+
+    RestApiId:
+        Type: String
+        Description: api gateway logical id
+
+    ParentId:
+        Type: String
+        Description: api gateway parent/root id
+
+    EcsStageName:
+        Type: String
+        Description: api gateway stage name for ecs service
+        Default: v1
+
+    Domain:
+        Type: String
+        Description: domain for ecs service
+
+    EcsEndpoint:
+        Type: String
+        Description: endpoint path part
+        Default: ''
+
+Transform:
+  - AWS::CodeDeployBlueGreen
+
+Hooks:
+    CodeDeployBlueGreenHook:
+        Type: AWS::CodeDeploy::BlueGreen
+        Properties:
+            TrafficRoutingConfig:
+                Type: AllAtOnce
+            Applications:
+              - Target:
+                    Type: AWS::ECS::Service
+                    LogicalID: EcsService
+                ECSAttributes:
+                    TaskDefinitions:
+                      - BlueTaskDefinition
+                      - GreenTaskDefinition
+                    TaskSets:
+                      - BlueTaskSet
+                      - GreenTaskSet
+                    TrafficRouting:
+                        ProdTrafficRoute:
+                            Type: AWS::ElasticLoadBalancingV2::Listener
+                            LogicalID: ElbListenerProdTraffic
+                        TargetGroups:
+                          - ElbTargetGroupBlue
+                          - ElbTargetGroupGreen
+
+Resources:
+    ElbSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: access from general public
+            VpcId: !Ref Vpc
+            SecurityGroupIngress:
+              - IpProtocol: tcp
+                FromPort: !Ref ContainerPort
+                ToPort: !Ref ContainerPort
+                CidrIp: !Ref VpcCiderBlock
+
+    ElbTargetGroupBlue:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties:
+            HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+#### start: Nlb ####
+            HealthCheckPath: !Ref HealthCheckPath
+#### end: Nlb ####
+            HealthCheckPort: !Ref ContainerPort
+            HealthCheckProtocol: !Ref ElbProtocol
+            HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+            HealthyThresholdCount: !Ref HealthyThresholdCount
+#### start: Nlb ####
+            Matcher:
+                HttpCode: 200
+#### end: Nlb ####
+            Port: !Ref ContainerPort
+            Protocol: !Ref ElbProtocol
+            Tags:
+              - Key: Group
+                Value: !Ref TagName
+            TargetType: ip
+            UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+            VpcId: !Ref Vpc
+
+    ElbTargetGroupGreen:
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties:
+            HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+#### start: Nlb ####
+            HealthCheckPath: !Ref HealthCheckPath
+#### end: Nlb ####
+            HealthCheckPort: !Ref ContainerPort
+            HealthCheckProtocol: !Ref ElbProtocol
+            HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+            HealthyThresholdCount: !Ref HealthyThresholdCount
+#### start: Nlb ####
+            Matcher:
+                HttpCode: 200
+#### end: Nlb ####
+            Port: !Ref ContainerPort
+            Protocol: !Ref ElbProtocol
+            Tags:
+              - Key: Group
+                Value: !Ref TagName
+            TargetType: ip
+            UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+            VpcId: !Ref Vpc
+
+    Elb:
+        Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+        Properties:
+            Type: network
+            Name: ElbBlueGreen
+            IpAddressType: ipv4
+#### start: LoadBalancerAttributes ####
+            LoadBalancerAttributes:
+#### start: AccessLogsEnabled ####
+              - Key: access_logs.s3.enabled
+                Value: !Ref AccessLogsEnabled
+              - Key: access_logs.s3.bucket
+                Value: !Ref AccessLogsBucket
+              - Key: access_logs.s3.prefix
+                Value: !Ref AccessLogsPrefix
+#### end: AccessLogsEnabled ####
+#### start: LoadBalancerCrossZone ####
+              - Key: load_balancing.cross_zone.enabled
+                Value: !Ref LoadBalancerCrossZone
+#### end: LoadBalancerCrossZone ####
+#### end: LoadBalancerAttributes ####
+            Scheme: internet-facing
+#### start: Nlb ####
+            SecurityGroups:
+              - !Ref ElbSecurityGroup
+#### end: Nlb ####
+            Subnets: !Ref ElbSubnets
+            Tags:
+              - Key: Group
+                Value: !Ref TagName
+
+    ElbListenerProdTraffic:
+        Type: AWS::ElasticLoadBalancingV2::Listener
+        Properties:
+            DefaultActions:
+              - Type: forward
+                ForwardConfig:
+                    TargetGroups:
+                      - TargetGroupArn: !Ref ElbTargetGroupBlue
+            LoadBalancerArn: !Ref Elb
+#### start: Nlb ####
+            Certificates:
+              - CertificateArn: !Ref CertificateArn
+#### end: Nlb ####
+            Port: !Ref HostPort
+            Protocol: !Ref ElbProtocol
+
+    EcsTaskExecutionRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                  - Sid: EcsTaskExecutionRole
+                    Effect: Allow
+                    Principal:
+                        Service: ecs-tasks.amazonaws.com
+                    Action: sts:AssumeRole
+            ManagedPolicyArns:
+              - arn:aws:iam::274327307511:role/AWSCloudFormationStackSetAdministrationRole
+
+    BlueTaskDefinition:
+        Type: AWS::ECS::TaskDefinition
+        Properties:
+          ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+          ContainerDefinitions:
+            - Name: !Ref ContainerName
+              Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}:${ParameterDockerApplication}
+              Essential: true
+              PortMappings:
+                - Protocol: tcp
+                  ContainerPort: !Ref ContainerPort
+          RequiresCompatibilities:
+            - FARGATE
+          NetworkMode: awsvpc
+          Cpu: !Ref Cpu
+          Memory: !Ref Memory
+          Family: ecs-demo
+
+    EcsCluster:
+        Type: AWS::ECS::Cluster
+        Properties: {}
+
+    EcsService:
+        Type: AWS::ECS::Service
+        Properties:
+            Cluster: !Ref EcsCluster
+            DesiredCount: 1
+            DeploymentController:
+                Type: EXTERNAL
+
+    BlueTaskSet:
+        Type: AWS::ECS::TaskSet
+        Properties:
+            Cluster: !Ref EcsCluster
+            LaunchType: FARGATE
+            NetworkConfiguration:
+                AwsVpcConfiguration:
+                    SecurityGroups:
+                      - !Ref ElbSecurityGroup
+                    Subnets: !Ref EcsSubnets
+            PlatformVersion: 1.3.0
+            Scale:
+                Unit: PERCENT
+                Value: 1
+            Service: !Ref EcsService
+            TaskDefinition: !Ref BlueTaskDefinition
+            LoadBalancers:
+              - ContainerName: !Ref ContainerName
+                ContainerPort: !Ref ContainerPort
+                TargetGroupArn: !Ref ElbTargetGroupBlue
+
+    PrimaryTaskSet:
+        Type: AWS::ECS::PrimaryTaskSet
+        Properties:
+            Cluster: !Ref EcsCluster
+            Service: !Ref EcsService
+            TaskSetId: !GetAtt BlueTaskSet.Id
+
+    EcsVpcLink:
+        Type: AWS::ApiGateway::VpcLink
+        Properties:
+            Description: vpc link between api gateway and network load balancer
+            Name: EcsVpcLink
+            TargetArns:
+              - !Ref Elb
+        DependsOn: Elb
+
+      MockMethod:
+          Type: AWS::ApiGateway::Method
+          Properties:
+            RestApiId: !Ref RestApiId
+            ResourceId: !Ref ParentId
+            HttpMethod: GET
+            AuthorizationType: NONE
+            Integration:
+                Type: HTTP
+                IntegrationHttpMethod: GET
+                Uri: !Sub ${Domain}${EcsEndpoint}
+                ConnectionType: VPC_LINK
+                ConnectionId: !Ref EcsVpcLink
+        DependsOn: EcsVpcLink
+
+      Deployment:
+          Type: AWS::ApiGateway::Deployment
+          Properties:
+              RestApiId: !Ref MyRestApi
+              Description: ecs deployment
+              StageName: !Ref EcsStageName
+          DependsOn: MockMethod
