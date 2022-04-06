@@ -1,6 +1,0 @@
-{
-"Parameters" : {
-"ElbSubnets" : "subnet-dbecf4bc,subnet-aef2148f,subnet-58311e66",
-"Vpc" : "vpc-b3dde9c9"
-}
-}
